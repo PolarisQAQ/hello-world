@@ -1,0 +1,299 @@
+\documentclass{xdupgthesis}
+\usepackage{graphicx}
+\usepackage{amsthm}
+\usepackage{amsmath,amsfonts}
+\usepackage{algorithmic}
+\usepackage{autobreak}
+\usepackage{algorithm}
+\usepackage{amssymb}
+\usepackage[backend=biber,style=gb7714-2015,gbalign=gb7714-2015,gbpub=false]{biblatex}
+\xdusetup{
+    info / title = {论如何让用户\\认真阅读文档},
+    style / bib-backend = biblatex    
+}
+\addbibresource{MIMO.bib}
+% \linespread{3}
+\renewcommand{\algorithmicrequire}{ \textbf{输入:}} %Use Input in the format of Algorithm
+\renewcommand{\algorithmicensure}{ \textbf{输出:}}
+\begin{document}
+\chapter{相关理论基础介绍}
+本章主要对本文中算法所涉及到的一些技术基础以进行介绍。首先对大规模MIMO技术下行系统的信道估计基本原理进行介绍。随后我们稀疏信号重建恢复问题的数学表达以及几种常见算法，我们分析了各种算法的缺点，随后我们详述了本文所提出的SU-MIMO信道估计算法二和MU-MIMO信道估计算法的基础算法，即正交近似消息传递（Orthogonal Approximate Message Passing，OAMP）算法。接着，我们阐明概率图模型建模以及推断学习相关理论的基本知识，同时介绍了马尔科夫链与前后算法。最后我们总结了本章的内容。
+\section{毫米波大规模MIMO信道估计基础}
+\subsection{基础MIMO模型}
+MIMO系统通过在发送和接收端同时使用多个天线来增加信号的可靠性和吞吐量。然而由于存在多个天线，信号在发送和接收端的传输路径较复杂，容易受到多径效应、多天线间干扰等影响。因此，MIMO系统需要获取信道状态信息来对信号进行预处理和后处理，如波束成形、功率控制等，以优化信道容量和抗干扰能力，提高通信质量和系统性能。在频分MIMO通信系统中，基站端根据用户实际信道环境，定期发送信道状态信息（Channel State Information，CSI）探测信号以检测信道状态。忽略信号传输过程噪声的影响，一个最简单的MIMO信道探测过程数学模型如\eqref{eq2-1}所示：
+\begin{equation}
+    \label{eq2-1}
+    \mathbf{Y} = \mathbf{H}\mathbf{S}
+\end{equation}
+其中$\mathbf{Y} \in \mathbb{C}^{N_\mathrm{MS}\times L_\mathrm{S}}$，$\mathbf{H} \in \mathbb{C}^{N_\mathrm{MS}\times N_\mathrm{BS}}$，$\mathbf{S} \in \mathbb{C}^{N_\mathrm{BS}\times L_\mathrm{S}}$分别是用户端接收到的导频信号，MIMO信道矩阵以及基站端发出的导频信号，$N_\mathrm{BS}$与$N_\mathrm{MS}$分别是基站端与用户端所配备的天线数量，$L_\mathrm{S}$为导频长度。此时，若想要求解出信道矩阵$\mathbf{H}$，传统的最简单的方法就是最小二乘法（Least Square），其计算方法如下所示：
+\begin{equation}
+    \begin{aligned}
+        \hat{\mathbf{H}}_{\mathrm{LS}} & =\arg \min _{\mathbf{H}}\|\mathbf{Y}-\mathbf{H S}\|_{F}^{2} \\
+        & =\mathbf{Y} \mathbf{S}^{\dagger}=\mathbf{Y} \mathbf{S}^{H}\left(\mathbf{S S}^{H}\right)^{-1}
+    \end{aligned}
+\end{equation}
+其中$\mathbf{S}^{\dagger}$是导频矩阵$\mathbf{S}$右伪逆，而存在伪逆一个必要条件是有$L_\mathrm{S} \leq N_\mathrm{BS}$条件成立。在传统的MIMO系统中，用户端与基站端一般配备2，4或8根天线来进行数据传输，其导频长度要求不高可以忽略。但是在大规模MIMO系统中，基站端一般配置64，128，256甚至更多根天线以获得更大的信道增益以及波束赋性能力以补偿毫米波的路径传输损耗，此时导频开销十分庞大，将严重浪费通信带宽，传统的通过信道估计算法显然并不适用于大规模MIMO下行信道的估计。并且，在实际部署的Massive MIMO系统中，由于独立的射频链路价格昂贵，混合波束赋形的架构更受青睐，但其也信道估计带来新的挑战。而关于混合波束赋形的毫米波大规模MIMO系统模型我们将在后面的章节给出。
+\subsection{毫米波大规模SU-MIMO与MU-MIMO技术介绍及其特点}
+基站同一频段同一时间内只能服务于一个用户设备的MIMO系统，我们称其为SU-MIMO系统。SU-MIMO系统工作时需要为小区内的不同用户设备分配不同的时频资源，以避免用户之间产生干扰，所以其是一种点对点的通信技术。反之，在MU-MIMO技术中，基站可以将多个数据流同时传输给多个用户，利用空时块编码（Space Time Block Coding，STBC）和空分多址（Space Division Multiple Access, SDMA）技术实现多用户同时传输，其是一种点对多技术\parencite{lu2014overview,li2010mimo}。
+
+在SU-MIMO系统中，基站端可以同一时间向单一用户传递多组数据流以提高单一用户数据吞吐率。同时，其也可以利用多天线的进行信道分集，即将同一数据流分配给不同的天线进行传输，在信道质量较差时也可以保证数据传输的可靠性和鲁棒性。但其缺点也同时也十分明显，首先便是SU-MIMO技术只能同时为一个用户提供服务，多用户通信时，用户设备需要等待基站响应，这限制了其信道容量与数据吞吐率。同时，SU-MIMO系统中要想数据吞吐率达到最大，需要用户设备端支持的最大数据流与基站端支持的最大数据流相同，而设备所支持的数据流数量与其所配备的天线数目相关，否则会造成资源闲置浪费。例如，假设基站端最大支持$4\times4$MIMO，其最高支持4路独立数据流，而用户设备端仅配备1根天线，此时基站最多只能传输一路数据流，剩余的3路数据流传输能力则会被浪费。
+
+而在MU-MIMO系统中，基站可以同时与多个用户进行通信，可以充分利用基站的多路数据流传输能力，并且降低每个用户的等待时间，从而降低了传输时延，提高了网络的容量和传输效率\parencite{li2010mimo}。但MU-MIMO也有明显的缺点：首先是其系统构造比较复杂，MU-MIMO需要对多个用户的信道进行联合估计和处理，因此需要更复杂的硬件和软件设计，以实现信道估计、数据流调度、干扰协调等功能；其次是其对同步要求较高，多个用户设备需要在同一个时间和频率资源上传输数据，因此对同步精度要求较高，一旦同步出现偏差，就可能导致数据的干扰和冲突；最后，MU-MIMO技术虽然可以提高系统吞吐量，但是每个用户的平均速率可能会下降，特别是在用户密度较高的情况下。这是因为在MU-MIMO系统中，基站会将天线资源分配给多个用户，从而导致每个用户获得的资源减少，因此每个用户的平均速率也会相应下降\parencite{liu2012downlink}。
+
+综上所述，SU-MIMO和MU-MIMO技术在通信对象和传输方式上存在明显的区别。应根据具体应用场景和需求来选择合适的技术。在需要支持多用户并提高网络容量和传输效率的场景下，MU-MIMO技术是比较适合的选择；在需要提高信道质量和可靠性的场景下，SU-MIMO技术是比较适合的选择。当然，在实际应用中，MU-MIMO和SU-MIMO技术也可以结合使用，以实现更高效的无线通信。而在本文中，我们将会针对SU-MIMO与MU-MIMO的不同信道特点，分别进行讨论，研究其信道估计算法。
+
+\section{稀疏信号重建问题}
+\begin{figure}[!ht]
+    \centering
+    \includegraphics[scale = 0.9]{LOS.PDF}
+    \caption{LOS路径与NLOS路径的简明示意图}
+    \label{LOS}
+\end{figure}
+传统的信道估计算法基于线性运算，在大规模MIMO下行链路的信道估计过程中，将会造成导频开销过大，影响通信系统传输效率。近年来，稀疏信号重建理论的发展为非线性毫米波大规模MIMO信道估计算法提供了新的发展方向。在实际的毫米波信道中，由于毫米波高频所带来的波束弱穿透性的缘故，信道一般在空间角度域模型被假设是稀疏的，即信号的波束方向仅集中于几个波束方向上，而根据波束有无发生反射，可将波束路径分为视距（Line of Sight，LOS）传播路径与非视距（Non-Line of Sight，NLOS）传播路径。图\ref{LOS}绘制了其二者的简明示意图：
+图中$\theta$与$\phi$分别指代路径的在基站端的离去角（Angle of Departure，AoD）与在用户端的到达角（Angle of Arrival, AoA）。同时，我们将到达角与离去角相近的路径归为一个路径簇。在毫米波通信中，由于弱散射性路径簇通常十分有限，所以信道可以建模为一个只有几组有效路径簇存在的空间模型，随后将其转化为为稀疏信号估计问题，其具体的数学模型我们将在第三章与第四章进行介绍，本节我们首先介绍稀疏信号恢复的基本理论以及几种常见的稀疏信号恢复算法。
+
+\subsection{稀疏信号重建基本理论以及几种经典算法介绍}
+稀疏信号重建理论是一种信号处理技术，其算法也被称为压缩感知算法（Compressive Sensing）它能够从非常少的采样数据中恢复出信号的完整信息。在传统的信号处理中，通常需要采集大量的信号数据来获取信号的完整信息。而稀疏信号重建理论通过利用信号的稀疏性质，仅从少量的采样数据中恢复出信号的完整信息，从而大大减少了数据采集和处理的时间和成本。稀疏信号重建在数学上可以用\eqref{eq2-3}的数学线性模型所表示，
+\begin{equation}
+    \label{eq2-3}
+    \mathbf{y} = \mathbf{F}\mathbf{g}+\mathbf{n}
+\end{equation}
+其中，$\mathbf{y} \in \mathbb{C}^{P}$为稀疏信号观测值，$\mathbf{F}\in \mathbb{C}^{P\times O}$为观测矩阵（sensing matrix），$\mathbf{g} \in \mathbb{C}^{O}$为稀疏信号，$\mathbf{n} \sim \mathcal{CN}(0,\sigma^2\mathbf{I})$为观测噪声。此时有$P \ll O$存在，其也意味着$O$维的高维信号被压缩为$P$维的低维信号。为被观测信号$\mathbf{g}$的稀疏性则是指其包含大量零元素或分量很小的元素，而稀疏度则是指其中非零元素的个数。稀疏信号重建便是从低微观测信号恢复重建出高维稀疏信号。
+
+一种最简单的压缩感知算法便是基于贪心算法的迭代算法。贪心算法的基本原理是根据每一步的局部最优解来得到全局最优解。在贪心算法中，我们每次都选择当前看起来最优的解，不断更新当前状态，直到找到最终解。匹配追踪（Orthogonal Matching Pursuit，OMP）算法是一种最基本的贪心算法，其具体算法步骤如下所示：
+\begin{enumerate}
+	\item 初始化：将残差向量$\mathbf{r}_0$初始化为观测向量$\mathbf{y}$，待估计的稀疏信号$\hat{\mathbf{g}}_0$初始化为一个全零向量，迭代次数为$i$。
+	\item 匹配追踪：从观测矩阵$\mathbf{F}$中选择一个最相关一列$\mathbf{f}_k$，即$k = \arg \max_o |\mathbf{f}_o^H \mathbf{r}|$。将$\mathbf{f}_k$加入估计信号中，即$\hat{\mathbf{g}} = \hat{\mathbf{g}}_{i-1} + c_k \mathbf{f}_k$，其中$c_k = \langle \mathbf{f}_k, \mathbf{r}_{i-1} \rangle$为$\mathbf{f}_k$的系数，计算新的残差$\mathbf{r}_i = \mathbf{r}_{i-1} - c_k \mathbf{f}_k$。
+	\item 判断收敛：如果残差$r_i$的范数已经小于一个预设的阈值，或者迭代次数已经达到一定的值，则跳转到第四步，否则继续进行第二步。
+	\item 信号恢复：输出信号$\hat{\mathbf{g}}$。
+\end{enumerate}
+可以看出MP算法原理简单且易实现，但是在MP算法的迭代过程中，残差向量在已选择的原子集合中进行垂直投影并非是正交的，这会使得每次迭代的结果并不少最优的而是次最优的，收敛需要很多次迭代。并且每一步都是局部最优的选择，可能会产生误差累积的问题。正交匹配追踪算法（Orthogonal Matching Pursuit，OMP）是MP算法的改进版\parencite{OMP}。具体来说，OMP算法与MP算法的基本思想相同，也是通过选取最具代表性的原子来逐步逼近原信号。不同之处在于，OMP算法在每一步的匹配追踪中，会选择与之前已选原子正交的原子作为新的基向量，这样可以避免选取高度相关的原子，减小了重构误差，提高了算法的稳定性和精度，本文不再列举其具体过程。同时，各种基于OMP的改进算法也不断被研究者所提出\parencite{cosamp,stomp}以改进算法的鲁棒性和收敛速度。
+
+基于梯度下降而最小化信号$\ell_1$范数的压缩感知算法则是一种基于凸优化理论的算法，它寻求最小化误差和稀疏性之间的平衡。即在优化模型中引入$\ell_1$正则化项，使得模型最终得到的结果是一个稀疏向量。其通过最小化信号的$\ell_1$范数来实现信号的稀疏表示，即
+\begin{equation}
+    \label{eq2-4}
+        \underset{\hat{\mathbf g}}\min \left\| { \hat{\mathbf g}}\right\|_{1}
+        \quad
+        \text { s.t. }\left\|{\mathbf {y}}- \mathbf F(i) \hat{\mathbf g}\right\|_{2}^2<\epsilon。
+\end{equation}
+软阈值迭代算法（Iterative Reconstruction Algorithm，ISTA）时解决$\ell_1$正则化问题的一种迭代算法。ISTA算法其基本思想是对信号的每个分量进行阈值处理，以增加信号的稀疏性，并将其投影到合适的子空间中，通过不断缩小阈值，将非稀疏的向量逐步变为稀疏向量。其基本过程如下:
+\begin{enumerate}
+	\item 初始化：待估计的稀疏信号$\hat{\mathbf{g}}_0$初始化为一个全零向量，阈值为$\lambda$，学习率为$\alpha$，迭代次数为$i$。一般来说，初始向量可以随机生成或全零向量。
+	\item 计算当前估计的残差$\mathbf{r}_i = \mathbf{y} - \mathbf{F} \hat{\mathbf{g}}_{i}$，根据残差的梯度更新估计值$\hat{\mathbf{g}}_{i+1} = S_{\lambda/\alpha}(\hat{\mathbf{g}}_{i} + \alpha \mathbf{F}^H \mathbf{r}_{i})$，$S_{\lambda/\alpha}$是软阈值函数，即$S_{\lambda}(g) = \text{sign}(g) (\lvert g \rvert - \lambda)_+$。
+	\item 判断收敛：如果满足收敛条件（例如迭代次数达到预设值），则停止迭代跳转到第四步；否则，返回第二步骤。
+	\item 信号恢复：输出估计结果$\hat{\mathbf{g}} = \hat{\mathbf{g}}_{(i+1)}$。
+\end{enumerate}
+在 ISTA 算法中，通过对估计值进行软阈值处理，将信号的稀疏性增强。学习率参数$\alpha$控制了每次更新的步幅大小。算法的收敛速度取决于残差 $\mathbf{r}_{i}$ 的大小，以及学习率参数$\alpha$的选择，但是其总体收敛速度比较慢。针对此缺点，研究人员开发出了快速软阈值迭代算法法（Fast Iterative Shrinkage-Thresholding Algorithm，FISTA）\parencite{fista}以加跨算法收敛速度，FISTA在ISTA的基本框架上引入了一个额外的步骤，即利用前一个迭代点的信息来估计当前迭代点的下降方向，进而通过加速梯度下降的方式来加速算法的收敛，使得算法在保持ISTA算法简洁性的同时，具有更快的收敛速度和更好的稳定性。
+
+然而上述所提及的算法中，基于贪心迭代的OMP算法在求解前需要知道信号的稀疏度以确定其迭代最大值，且由于其并未对噪声进行处理，当信号中存在噪声时，OMP算法可能会选取噪声作为原子之一，从而导致估计结果的误差增大，从而导致其对于噪声较大的数据表现不太稳定。而在基于最小化信号的$\ell_1$范数来实现信号的稀疏表达的FISTA算法中，需要手动调整学习率参数。学习率参数是FISTA算法的关键参数之一，它对算法的收敛速度和稳定性有重要影响。但是，寻找最佳的步长参数通常是一项困难的任务，需要进行多次试验来找到最优的值。同时算法所需的迭代次数较多，在面对高维数据时其计算开销比较大。在近几年的研究中，近似消息传递（Approximate Message Passing，AMP）\parencite{donoho2009message}算法凭借着其拥有较高的精度和稳定性的特点，逐渐被广泛研究与应用。AMP算法能够自适应地估计噪声和信号稀疏度，不需要预先知道信号的具体分布。同时相较于前两种算法，AMP算法的迭代次数更少，收敛速度更快。AMP算法的核心思想是将原问题转化为相应的消息传递（Message Passing）问题。将其转化为消息传递问题后，其通过一系列的高斯近似简化算法设计。通过这种方式，AMP算法可以实现对信号的高效稀疏表示。在信息传递过程中，AMP算法可以将局部信息进行传递和汇总，通过迭代的方式实现信号的逐步精细估计。在迭代过程中，AMP算法根据前一次迭代的结果和测量矩阵的结构，从观测向量推断出信号向量的分布，然后计算出信号向量的一个估计。接着，它使用一个修正器来调整估计的信号向量以消除迭代过程中观测矩阵与估计结果之间的相关性，并将其传递到下一个迭代中。AMP算法在不断迭代的过程中逐步提高对信号的估计精度，直到达到收敛，并且其收敛情况可以用State Evolution准确刻画。相较于传统的基于匹配追踪算法和基于信号$\ell_1$范数梯度下降的算法，AMP算法具有更好的性能和更快的速度，适用于大规模的信号重构问题。然而AMP算法对观测矩阵的要求较高，其要求观测矩阵各个元素为独立同分布的高斯随机变量，否则算法本身将会发散，这限制了其应用场景。
+
+\subsection{正交近似消息传递算法OAMP}
+AMP算法对观测矩阵的严苛要求制约了其的实际应用场景，近年来，有学者提出了基于AMP思想的OAMP（也名Turbo-CS）\parencite{ma2014turbo,ma2015performance,ma2017orthogonal}算法，其对观测矩阵的要求弱化为部分酉矩阵（partial unitary matrix），即观测矩阵$\mathbf{F}$满足$\mathbf{F}\mathbf{F}^H = \mathbf{I}$，其中$\mathbf{I}$为维度是$P \times P$的单位矩阵，并且其收敛速度进一步加快，这使得其实际适用范围扩大。接下来我们对其进行详细介绍。
+
+\begin{figure}
+    \centering
+    \includegraphics[scale = 0.7]{原生Turbo-CS.pdf}
+    \caption{OAMP算法结构示意图}
+    \label{原生Turbo-CS}
+\end{figure}
+
+假设\eqref{eq2-3}中的稀疏信号$\mathbf{g}$中各元素为独立同分布的随机变量，并且其服从以下伯努利-高斯（Bernoulli-Gaussian）分布：
+\begin{equation}
+    \label{eq2-5}
+    g_{j} \sim\left\{\begin{array}{ll}
+        0 & \text { probability }=1-\lambda \\
+        \mathcal{C N}\left(0, \lambda^{-1}\right) & \text { probability }=\lambda
+        \end{array}\right.
+\end{equation}
+图\ref{原生Turbo-CS}所示的是OAMP算法结构示意图，其结构与Turbo解码器\parencite{berrou1996near}类似。算法整体由模块A与模块B两部分所组成，模块A是基于稀疏信号观测值$\mathbf{y}$与模块B传来的信息来进行估计的线性最小均方误差（Linear Minimum Mean Squared Error
+，LMMSE）估计器，而模块B则基于模块A传来的信息与\eqref{eq2-5}中稀疏信号$\mathbf{g}$的先验分布而进行最小均方误差（Minimum Mean Squared Error
+，MMSE）估计。每个模块的的外部信息（extrinsic message）是经解相关操作后的信息，并且其传给另一个模块后则作为另一模块的先验信息所使用，即有$\mathbf{g}_{A}^{pri} = \mathbf{g}_{B}^{ext}$，${v}_{A}^{pri} = {v}_{B}^{ext}$，$\mathbf{g}_{B}^{pri} = \mathbf{g}_{A}^{ext}$，${v}_{B}^{pri} = {v}_{A}^{ext}$，两个模块迭代运算不断优化调整估计结果直至收敛。我们下面给出其详细算法计算过程。
+
+在模块A中，LMMSE估计器基于稀疏信号观测值$\mathbf{y}$与模块B传来的信息来进行估计。假定稀疏信号$\mathbf{g}$有先验分布$\mathbf{g} \sim \mathcal{CN}(\mathbf{g}_{A}^{pri},v_{A}^{pri}\mathbf{I})$，在此设定上，LMMSE估计后的$\mathbf{g}$的后验分布依然服从复高斯分布\parencite{kay2013fundamentals}，其均值与与方差为：
+\begin{equation}
+    \mathbf{g}_{A}^{{post }}=\mathbf{g}_{A}^{p r i}+\frac{v_{A}^{p r i}}{v_{A}^{{pri }}+\sigma^{2}} \mathbf{F}^{H}\left({\mathbf{ y}}-\mathbf{F} \mathbf{g}_{A}^{ {pri }}\right)
+\end{equation}
+\begin{equation}
+    v_{A}^{p o s t}=v_{A}^{p r i}-\frac{P}{O} \cdot \frac{{v_{A}^{p r i}}^{2}}{v_{A}^{p r i}+\sigma^{2}}
+\end{equation}
+但需要注意的是，由于输入与输出之间存在相关性，计算出的后验分布信息并不能直接用于消息传递。相反，我们需要通过排除输入信息的贡献度来计算外部信息$\mathbf{g}_{A}^{ext},{v}_{A}^{ext}$，输入信息，后验信息与外部信息之间有如下关系成立：
+\begin{equation}
+    \label{eq2-6}
+    \begin{array}{l}
+        \mathcal{C N}\left(\mathbf{g} ; \mathbf{g}_{A}^{p o s t}, v_{A}^{p o s t} \mathbf{I}\right) 
+        \propto \mathcal{C N}\left(\mathbf{g}_{} ; \mathbf{g}_{A}^{p r i}, v_{A}^{p r i} \mathbf{I}\right) \mathcal{C N}\left(\mathbf{g}_{} ; \mathbf{g}_{A}^{e x t}, v_{A}^{e x t} \mathbf{I}\right)
+        \end{array}
+\end{equation}
+其中，$\propto$表示为简化书写，表达式已缩放或省去常数项或归一化。 \eqref{eq2-6}中右侧部分$\exp \left(-\frac{1}{2 v_{A}^{pri}}\left(\mathbf{g}-\mathbf{g}_{A}^{pri}\right)^{2}\right)\exp \left(-\frac{1}{2 v_{A}^{e x t}}\left(\mathbf{g}-\mathbf{g}_{A}^{e x t}\right)^{2}\right)$给出了输入先验信息误差$\mathbf{g}-\mathbf{g}_{A}^{pri}$与外部信息误差$\mathbf{g}-\mathbf{g}_{A}^{e x t}$的联合分布，其同时也表明输入误差与外部信息的误差是相互独立的，而对于复高斯分布，相互独立则意味着不相关。由此可以得出外部信息有：
+\begin{equation}
+    \label{eq2-7}
+    \begin{aligned}
+        \mathbf{g}_{A}^{e x t}=v_{B}^{p r i}\left(\frac{\mathbf{g}_{A}^{{post }}}{v_{A}^{{post }}}-\frac{\mathbf{g}_{A}^{p r i}}{v_{A}^{p r i}}\right)\\
+        v_{A}^{e x t}=\left(\frac{1}{v_{A}^{p o s t}}-\frac{1}{v_{A}^{p r i}}\right)^{-1}
+    \end{aligned}
+\end{equation}
+
+在模块B中，MMSE估计器基于模块A传来的信息与\eqref{eq2-5}中稀疏信号$\mathbf{g}$的先验分布而进行估计。此时，假定有观测模型：
+\begin{equation}
+    \label{eq2-8}
+    \mathbf{g}_{B}^{p r i}=\mathbf{g}+\mathbf{n}^{pri}_{B}
+\end{equation}
+其中，$\mathbf{n}^{pri}_{B}\sim\mathcal{CN}(\mathbf{0},v_{B}^{pri}\mathbf{I})$为加性高斯白噪声，MMSE估计器的作用便是进行降噪所以又称为MMSE降噪器。经过估计后的后验信息有:
+\begin{equation}
+    \begin{aligned}
+        \mathbf{g}_{B}^{p o s t} & =\mathrm{E}\left[\mathbf{g} \mid \mathbf{g}_{B}^{p r i}\right] \\
+        v_{B}^{p o s t} & =\frac{1}{O} \sum_{i=1}^{O} \operatorname{var}\left[x_{i} \mid x_{B, i}^{p r i}\right],
+    \end{aligned}
+\end{equation}
+与\eqref{eq2-6}相似，模块B的输入先验误差与外部信息误差相互独立且不相关，其外部信息的计算方式与\eqref{eq2-7}相同。模块A与模块B信息传递交替进行，当算法迭代次数达到最大值或者有$\mathbf{g}_{B}^{p o s t} = \mathbf{g}_{A}^{p o s t}$成立时，算法迭代完成，输出结果。
+
+相较于AMP算法，OAMP算法不仅放宽了对观测矩阵的要求使其易于实现，同时进一步加快了收敛速度\parencite{ma2015performance,ma2017orthogonal}，使其使用范围更加广泛。在本文中，我们将基于OAMP算法，针对SU-MIMO与MU-MIMO不同的信道动态与静态特征，进行算法的开发，使其更加适合毫米波大规模MIMO信道估计算法。
+
+\section{概率图模型基础}
+概率图模型（Probabilistic Graphical Model，PGM）是一种基于图形表示的概率建模工具，它能够简化复杂问题的概率计算，帮助人们更好地理解变量之间的概率关系。概率图模型通常被用于建模大量变量之间的依赖关系，例如自然语言处理、计算机视觉、机器学习、信号处理和生物信息学等领域。概率图模型分为两类：有向图模型（Directed Graphical Model，DGMs）和无向图模型（Undirected Graphical Model，UGM）。DGM通常也被称为贝叶斯网络（Bayesian Network），它使用有向边表示变量之间的因果依赖关系，通常用来描述因果模型\parencite{frey2005comparison}。UGM通常也被称为马尔可夫网络（Markov Network），它使用无向边表示变量之间的相关关系，通常用来描述无序模型。在本文中，基于信道特性的考量，我们选取马尔可夫模型有向图模型对毫米波大规模MIMO信道进行建模，故本节重点介绍马尔可夫及其相关推断算法。
+
+\subsection{马尔可夫模型}
+马尔可夫模型由节点和有向边所组成，每个节点代表一个变量，每条有向边表示父节点到子节点的条件依赖关系。具体来说，一个节点代表一个随机变量，这个变量可能是观测到的或者未观测到的，即可观测变量和隐变量。一个边表示两个随机变量之间的依赖关系。如果变量$X_1$的取值可以影响变量$X_2$的取值，那么就会有从节点$X_1$指向节点$X_2$的一条有向边。这个方向表示了依赖关系的方向，即变量$X_1$的取值对变量$X_2$的取值有影响，此时我们称节点$X_1$是节点$X_2$的父节点。如果边缘节点并且没有指向它的有向边，则此节点我们使用$G=(I,E)$表示一个概率图模型，其中$I$代表图形中所有节点的集合，$E$则代表有向边的集合。我们使用$X_i$来指代网络中某一节点$i$所表示的随机变量，全部节点$\mathbf{X}$的概率可以表示为：
+\begin{equation}
+    \label{X}
+    p\left(\mathbf{X}\right) = \prod_{i \in I}^{}p\left(X_i \mid X_{pa\left(i\right)}\right) 
+\end{equation}
+其中$X_{pa\left(i\right)}$表示$X_i$的父节点。
+\begin{figure}[!htb]
+    \centering
+    \includegraphics[scale = 0.4]{DGM.PDF}
+    \caption{一个简单的马尔可夫模型示例}
+    \label{DGM}
+\end{figure}
+
+我们使用如\ref{DGM}中的一个简单的马尔可夫模型示例进行介绍。图中的马尔可夫模型由$\{X_1,X_2,X_3,X_4,X_5\}$五个变量节点，以及$X_1 \rightarrow X_3$，$X_2 \rightarrow X_3$，$X_3 \rightarrow X_4$，$X_3 \rightarrow X_5$四条有向边所组成。图中各节点的联合概率分布有：
+\begin{equation}
+    \label{X_1}
+    p\left(X_1,X_2,X_3,X_4,X_5\right)=p_E(X_5\mid X_3)p_D(X_4\mid X_3)p_C(X_3\mid X_1,X,2)p_B(X_2)p_A(X_1)
+\end{equation}
+其中各个节点的概率分布形式可以通过领域专家、历史数据、统计分析等方式获取，而其分布的具体参数则可以通过使用最大似然估计或贝叶斯估计来估计。其中，最大似然估计是在数据集上最大化似然函数，估计每个节点的参数，贝叶斯估计则是利用贝叶斯定理，从先验分布和似然函数中估计每个节点的参数。得到具体确定的参数后，就可以使用该网络进行推断。给定一些变量的状态，可以通过贝叶斯推断来计算其他变量的概率分布。
+
+\subsection{因子图与消息传递算法}
+马尔可夫模型推断是指利用马尔可夫模型的结构和参数来计算给定一些观测变量时其他变量的后验概率分布。在本文中，我们将马尔可夫模型转化为因子图（Factor Graph）并使用消息传递（Message Passing）进行贝叶斯推断。本小节将对二者展开介绍。
+
+因子图是一种用于表示概率模型的图形化表达方式。它将概率图中的节点和边表示为概率模型中的变量和因子，并且可以有效地处理大规模的复杂模型。在因子图中，变量和因子分别表示为不同类型的节点。变量节点表示概率模型中的随机变量，而因子（函数）节点表示变量之间的关系。边连接着变量节点和因子节点，表示变量与因子之间的依赖关系。每个因子节点都会有一个因子函数，表示它所连接的变量之间的关系，因子函数可以是任意的函数形式\parencite{factorgraph}。在因子图中，我们可以通过信息传递的方式，进行推断和学习等任务。因为因子图的形式和表示方法较为简洁，很多概率模型都可以通过转化为因子图的形式来简化问题和加速算法的计算。
+
+\begin{figure}[!htb]
+    \centering
+    \includegraphics[scale = 0.6]{fg.PDF}
+    \caption{图\ref{DGM}中马尔可夫模型的因子图}
+    \label{fg}
+\end{figure}
+根据因子图的定义，我们将图\ref{DGM}中的马尔可夫模型转化为如图\ref{fg}的因子图。其中$\{X_1,X_2,X_3,X_4,X_5\}$为五个变量节点，$\{f_A,f_B,f_C,f_D,f_E\}$则为因子节点，边线仅表示它们之间的函数关系。各因子节点有$f_A=p_A,f_B=p_B,f_C=p_C,f_D=p_D,f_E=p_E$。因子图是对概率图模型联合分布概率函数因子分解的一种直观解释。
+
+假设我们需要求得$X_1$变量节点的边缘分布，最直观的算法便是进行如下的积分：
+\begin{equation}
+    \label{sum}
+    \begin{aligned}
+   p\left(X_1\right)&=\int_{X_2,X_3,X_4,X_5} p\left(X_1,X_2,X_3,X_4,X_5\right)\\
+   &=f_A(X_1)\int_{X_{2}} f_{B}\left(X_{2}\right) \int_{X_{3}} f_{C}\left(X_{1}, X_{2}, X_{3}\right) \int_{X_{4}} f_{D}\left(X_{3}, X_{4}\right) \int_{X_{5}} f_{E}\left(X_{3}, X_{5}\right)\\
+   &=f_A(X_1) \left\{\int_{\sim\{X_1\}}f_{B}\left(X_{2}\right)f_{C}\left(X_{1}, X_{2}, X_{3}\right)\left[\int_{\sim\{X_3\}}f_{D}\left(X_{3}, X_{4}\right)\right]\left[\int_{\sim\{X_3\}}f_{E}\left(X_{3}, X_{5}\right)\right]\right\}
+    \end{aligned}
+\end{equation}
+此时，我们定义
+\begin{equation}
+    \label{X1}
+    \begin{aligned}
+        f_I &= \int_{\sim\{X_3\}}f_{E}\left(X_{3}, X_{5}\right)= \int_{X_5}f_{E}\left(X_{3}, X_{5}\right)\\
+        f_{II}&=\int_{\sim\{X_3\}}f_{D}\left(X_{3}, X_{4}\right)=\int_{X_4}f_{D}\left(X_{3}, X_{4}\right)\\
+        f_{III}& = f_{I}\cdot f_{II}\\
+        f_{IV}&=\int_{X_3}f_{C}\left(X_{1}, X_{2}, X_{3}\right)\cdot f_{III}\\
+        f_{V}&=\int_{X_2}f_{B}\left(X_{2}\right)f_{IV}
+    \end{aligned}
+\end{equation}
+最终我们有
+\begin{equation}
+    p\left(X_1\right) = f_A(X_1)\cdot f_{V}
+\end{equation}
+而计算$X_2$节点的边缘概率时，可以取
+\begin{equation}
+    f_{VI} = \int_{X_1}f_{A}\left(X_{2}\right)f_{IV}
+\end{equation}
+最终$X_2$节点的边缘概率有
+\begin{equation}
+    \label{X2}
+    p\left(X_1\right) = f_B(X_2)\cdot f_{VI}
+\end{equation}
+可以看出，相较于\eqref{sum}中求取边缘概率的形式，\eqref{X2}的计算中，复用了\eqref{X1}中的大部分结果，最终减轻了其计算量。而消息传递算法求各变量节点边缘概率的思想便是将复杂的全局积分任务分解为多个局部积分小任务，每个小任务对应到因子图中的一个节点。这使得其计算时不再需要来自其它部分的信息，自此简化了计算\parencite{factorgraph}。
+
+在消息传递的过程中，需要其计算不同的和与积，故其又被称为和积算法（Sum-Product Algorithm）。我们下面给出其计算规则。我们使用$\mathcal{M}_{X_i \rightarrow f_e}$表示从变量节点到因子节点的信息，$\mathcal{M}_{f_e \rightarrow X_i}$表示从因子节点到变量节点的信息，$NE(X_i)$为因子图中变量节点$X_i$的邻居节点，$NE(f_e)$为函数$f_e$的自变量集合。变量节点到因子节点的消息计算方法为：
+\begin{equation}
+    \mathcal{M}_{X_i \rightarrow f_e}(X_i)=\prod_{f \in NE(X_i) \backslash\{f_e\}} \mathcal{M}_{f \rightarrow X_i}(X_i)
+\end{equation}
+因子节点到变量节点的计算方法为：
+\begin{equation}
+    \mathcal{M}_{ f_e\rightarrow X_i}(X_i)=\int_{\sim\{X_i\}}f_e(X)\prod_{X \in NE(f_e) \backslash\{X_i\}} \mathcal{M}_{X \rightarrow f_e}(X)
+\end{equation}
+而我们计算某个变量节点$X_i$的边缘概率分布，就等效为发送给$X_i$的所有消息的乘积，即任意一变量节点的边缘分布概率有：
+\begin{equation}
+    p\left(X_i\right)= \prod_{f \in NE(X_i)} \mathcal{M}_{ f\rightarrow X_i}(X_i)。
+\end{equation}
+
+\subsection{隐马尔科夫模型与向前向后算法}
+\begin{figure}[!htb]
+    \centering
+    \includegraphics[scale = 1]{HMM.pdf}
+    \caption{一个简单的隐马尔可夫模型的因子图化后的示例图}
+    \label{HMM}
+\end{figure}
+隐马尔科夫模型（Hidden Markov Model，HMM）\cite{rabiner1986introduction,mor2021systematic}是一种基于马尔可夫有向图模型，用来建模序列数据的概率图模型，其广泛应用于时间序列数据的建模和预测，在本文中，我们将其扩展至空间序列。一组序列可以描述一个未知的、隐含的马尔可夫过程，而该过程的表现则是观测序列。其由三部分组成：
+\begin{itemize}
+    \item 状态序列：$S={S_1,S_2,\cdots,S_N}$。
+    \item 观测序列：$O={O_1,O_2,\cdots,O_N}$。
+    \item 模型参数：HMM的模型参数有初始概率即$S_1$的分布概率，状态转移概率以及观测分布概率所组成。
+\end{itemize}
+在该模型中，假设随机变量的取值受到未知状态的影响，而这些未知状态是以马尔可夫过程的方式演化的，即：状态$S_n$仅与上一个状态$S_{n-1}$有关，而观测$O_n$仅依赖于当前状态$S_n$。同时，观测之间是条件独立的，状态之间也是条件独立的。因此，在HMM中，我们可以使用观测序列来推断潜在的状态序列。如图\ref{HMM}是一个简单的隐马尔可夫模型的因子图化后的示例图。图中$h_1$为初始化概率，$\{h_n\}$则为状态转移概率分布，$\{v_n\}$为观测概率分布。此模型的联合概率分布可以写为：
+\begin{equation}
+    p\left(\mathbf{S}, \mathbf{O}\right)=p\left(S_{1}\right) p\left(O_{1} \mid S_{1}\right) p\left(S_{2} \mid S_{1}\right) p\left(O_{2} \mid S_{2}\right) \prod_{n=3}^{N} p\left(S_{n} \mid S_{n-1}\right) p\left(O_{n} \mid S_{n}\right)
+\end{equation}
+
+与消息传递算法相同，我们可以通过将复杂积分任务分解为小任务的方法降低求解隐变量边缘分布的复杂度，此过程在隐马尔可夫模型中称为向前向后算法（Forward-Backward Algorithm），Forward-Backward算法的基本思想是，在已知观测序列的条件下，通过前向算法计算出状态序列从起始状态到每个状态的概率，再通过后向算法计算出状态序列从每个状态到终止状态的概率，最终得到每个状态的后验概率。因为隐马尔可夫模型的形式较为固定，我们给出以下前向算法与后向算法的具体形式：
+\begin{itemize}
+    \item 前向算法:
+    \begin{equation}
+        \begin{aligned} 
+            \mathcal{M}_{h_n \rightarrow S_{n}}\left(S_{n}\right)&=\int_{S_{n-1}} \mathcal{M}_{h_{n-1} \rightarrow S_{n-1}}\left(S_{n-1}\right) \mathcal{M}_{v_n \rightarrow S_{n-1}}\left(S_{n-1}\right) p\left(S_{n} \mid S_{n-1}\right) d S_{n-1}\\
+          &=\int_{S_{n-1}} \mathcal{M}_{h_{n-1} \rightarrow S_{n-1}}\left(S_{n-1}\right) p(O_{n-1}\mid S_{n-1}) p\left(S_{n} \mid S_{n-1}\right) d S_{n-1}
+          \end{aligned}
+    \end{equation}
+    \item 后向算法:
+    \begin{equation}
+        \begin{aligned} 
+            \mathcal{M}_{h_{n+1} \rightarrow S_{n}}\left(S_{n}\right)&=\int_{S_{n+1}} \mathcal{M}_{h_{n+1} \rightarrow S_{n+1}}\left(S_{n+1}\right) \mathcal{M}_{v_n \rightarrow S_{n+1}}\left(S_{n+1}\right) p\left(S_{n} \mid S_{n+1}\right) d S_{n+1}\\
+          &=\int_{S_{n+1}} \mathcal{M}_{h_{n+1} \rightarrow S_{n+1}}\left(S_{n+1}\right) p(O_{n+1}\mid S_{n+1}) p\left(S_{n} \mid S_{n+1}\right) d S_{n+1}
+          \end{aligned}          
+    \end{equation}
+\end{itemize}
+而此时我们便可得到任一状态变量$S_n$的后验边缘概率分布有：
+\begin{equation}
+    p(S_n\mid \mathbf{O}) \propto \mathcal{M}_{h_{n+1} \rightarrow S_{n}}\left(S_{n}\right)  \cdot \mathcal{M}_{h_n \rightarrow S_{n}}\left(S_{n}\right)
+\end{equation}
+
+
+
+\subsection{EM参数估计法}
+概率图模型的学习过程指的是在已知概率图结构的情况下，估计每个节点的条件概率分布。条件概率分布可以使用最大似然估计或贝叶斯估计来估计。其中，最大似然估计是在数据集上最大化似然函数，估计每个节点的参数，贝叶斯估计则是利用贝叶斯定理，从先验分布和似然函数中估计每个节点的参数\cite{larranaga2013review}。在本文中，我们使用基于最大似然估计的期望最大算法（Expectation Maximization Algorithm）\cite{EM,EMBG}来进行参数估计，我们在这里仅介绍其最基本的使用方法。
+
+EM算法是一种迭代算法，用于在给定观测数据的情况下，通过最大化数据的对数似然函数，估计概率模型参数。我们假设图\ref{fg}中$X_1,X_2$为可观测变量记为$\mathcal{X}$，$X_1，X_2，X_3$为不可观测变量即隐变量记为$\mathbf{Z}$，所有分布的参数合集记为$\rho$。EM算法包括两个步骤：E步骤（Expectation Step）和M步骤（Maximization Step）。下面是EM算法的详细步骤：
+\begin{enumerate}
+    \item 初始化模型参数：即给各概率分布参数$\rho$赋予初始值，其可以是任何先验知识或者完全随机，迭代次数为$i$。
+    \item E步骤：计算在当前参数下观测数据的期望（expectation），即计算变量的后验概率分布$p(\mathbf{Z}\mid\mathcal{X},\rho)$。
+    \item M步骤：计算在当前数据的期望下的最大化参数（maximization），即最大化期望对数似然函数$p$得到新的参数估计值，即
+\begin{equation}
+    \begin{aligned}
+        \rho_{i+1} & =\arg \max _{\rho} \int_{\mathbf{Z}} p(\mathcal{X}, \mathbf{Z} \mid \theta) p\left(\mathbf{Z} \mid \mathcal{X}, \rho_{i}\right) d \mathbf{Z} \\
+        & =\arg \max _{\rho} \mathbb{E}_{\mathbf{Z} \sim p\left(\mathbf{Z} \mid \mathcal{X}, \rho_{i}\right)}[\log p(\mathcal{X}, \mathbf{Z} \mid \rho_i)]
+        \end{aligned}
+\end{equation}
+    \item 重复第二和第三步，直到收敛，即参数估计值不再有明显变化。
+\end{enumerate}
+
+在E步骤中，需要计算每个隐藏变量在给定观测数据的条件下的后验概率其可以通过将马尔可夫模型转化为因子图后运行消息传递算法而获得每个隐藏变量在给定观测数据的条件下的后验概率。在M步骤中，需要最大化在当前数据的期望下的对数似然函数。这相当于最大化E步骤中计算出的期望对数似然函数。因此，M步骤可以通过最大化E步骤中计算出的完整数据的对数似然函数来实现，其可以通过梯度下降算法来完成。隐马尔科夫链的训练也可以使用EM算法，其中E步骤使用前向后向算法计算每个状态的前向概率和后向概率，M步骤更新模型参数。当算法收敛时，完成模型参数学习。
+
+
+\end{document}
